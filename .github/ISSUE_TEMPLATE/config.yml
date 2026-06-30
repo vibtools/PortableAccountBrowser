@@ -1,0 +1,12 @@
+﻿blank_issues_enabled: false
+contact_links:
+  - name: Questions and community support
+    url: https://github.com/vibtools/PortableAccountBrowser/discussions
+    about: Ask usage questions or discuss ideas.
+  - name: Vib Tools
+    url: https://vib.tools/
+    about: Visit the maintainer website.
+  - name: More free open-source tools
+    url: https://dev.vib.tools/
+    about: Browse other free projects from Vib Tools.
+
