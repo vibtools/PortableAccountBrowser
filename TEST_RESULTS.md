@@ -1,7 +1,11 @@
 # Test Results — v1.3.1
 
 - Python compilation: PASS
-- Automated unit/regression tests: 49/49 PASS
+- Automated unit/regression tests: 69/69 PASS
+- Ruff static analysis: PASS
+- Installed dependency consistency: PASS
+- Canonical source manifest checksum/inventory validation: PASS
+- Clean source-stage dry run: PASS
 - Source package required-file validation: PASS
 - Public binary sensitive-data scanner tests: PASS
 - Build-process self-detection regression: PASS

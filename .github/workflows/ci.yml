@@ -36,5 +36,20 @@ jobs:
       - name: Compile source
         run: python -m compileall -q app.py epb tests scripts
 
+      - name: Lint source
+        run: python -m ruff check .
+
       - name: Run automated tests
         run: python -m pytest -q
+
+      - name: Check dependency consistency
+        run: python -m pip check
+
+      - name: Verify canonical source release
+        shell: pwsh
+        run: |
+          $Version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          python scripts/package_publish_release.py `
+            --project-root . `
+            --version $Version `
+            --verify-source-only

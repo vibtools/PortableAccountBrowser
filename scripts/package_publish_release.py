@@ -5,60 +5,20 @@ import hashlib
 import os
 import shutil
 import stat
-import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, NoReturn
 
-SOURCE_FILES = (
-    ".gitattributes",
-    ".gitignore",
-    "app.py",
-    "EmailPortableBrowser.spec",
-    "portable.marker",
-    "pytest.ini",
-    "pyproject.toml",
-    "requirements.txt",
-    "requirements-dev.txt",
-    "requirements-build.txt",
-    "run_dev.bat",
-    "setup_dev.bat",
-    "test_dev.bat",
-    "build_release.bat",
-    "build_publish_ready.bat",
-    "build_personal_portable.bat",
-    "verify_publish_release.bat",
-    "README.md",
-    "SECURITY.md",
-    "PRIVACY.md",
-    "SUPPORT.md",
-    "BUILD.md",
-    "PUBLISHING.md",
-    "PROJECT_ANALYSIS.md",
-    "AUDIT_REPORT.md",
-    "TEST_RESULTS.md",
-    "FINAL_DELIVERY_STATUS.md",
-    "CHANGELOG.md",
-    "RELEASE_NOTES.md",
-    "WINDOWS_SOURCE_TEST_GUIDE.md",
-    "UPGRADE_FROM_1.2.1.md",
-    "UPGRADE_FROM_1.3.0.md",
-    "LICENSE",
-    "THIRD_PARTY_NOTICES.md",
-    "OPEN_SOURCE.md",
-    "CONTRIBUTING.md",
-    "CODE_OF_CONDUCT.md",
-    "VERSION",
-)
-SOURCE_DIRS = (".github", "assets", "docs", "epb", "scripts", "tests")
-EMPTY_PORTABLE_DIRS = (
-    "data/profiles",
-    "data/downloads",
-    "data/logs",
-    "data/temp",
-    "data/crash",
-    "runtime/chromium",
-)
+SOURCE_MANIFEST_NAME = "SOURCE_MANIFEST.sha256"
+SOURCE_SCAN_ROOTS = (".github", "assets", "docs", "epb", "scripts", "tests")
+WINDOWS_RESERVED_NAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{number}" for number in range(1, 10)),
+    *(f"lpt{number}" for number in range(1, 10)),
+}
 SENSITIVE_FILE_NAMES = {
     "cookies",
     "cookies-journal",
@@ -98,6 +58,8 @@ def remove_tree(path: Path) -> None:
 
 
 def copy_file(source: Path, destination: Path) -> None:
+    if source.is_symlink():
+        fail(f"Symbolic links are not permitted in the source release: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
 
@@ -113,64 +75,117 @@ def should_skip_source(path: Path) -> bool:
     )
 
 
-def copy_source_directory(source: Path, destination: Path) -> None:
-    for item in source.rglob("*"):
-        relative = item.relative_to(source)
-        if should_skip_source(relative):
-            continue
-        target = destination / relative
-        if item.is_symlink():
-            fail(f"Symbolic links are not permitted in the source release: {item}")
-        if item.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-        elif item.is_file():
-            copy_file(item, target)
+def read_source_manifest(root: Path) -> list[tuple[str, Path]]:
+    """Read and verify the canonical source-release inventory."""
+    root = Path(root).resolve()
+    manifest_path = root / SOURCE_MANIFEST_NAME
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        fail(f"Missing or symbolic source manifest: {manifest_path}")
+
+    entries: list[tuple[str, Path]] = []
+    seen_paths: set[str] = set()
+    previous_sort_key: str | None = None
+    try:
+        lines = manifest_path.read_text(encoding="ascii").splitlines()
+    except UnicodeError:
+        fail("Source manifest must contain ASCII text only.")
+
+    for line_number, line in enumerate(lines, start=1):
+        digest, separator, relative_text = line.partition("  ")
+        if separator != "  " or len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
+        ):
+            fail(f"Malformed source manifest entry at line {line_number}.")
+        if not relative_text or "\\" in relative_text or any(
+            ord(character) < 32 or ord(character) == 127 for character in relative_text
+        ):
+            fail(f"Unsafe source manifest path at line {line_number}: {relative_text!r}")
+
+        pure_path = PurePosixPath(relative_text)
+        unsafe_windows_part = any(
+            ":" in part
+            or part.endswith((" ", "."))
+            or part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
+            for part in pure_path.parts
+        )
+        if (
+            pure_path.is_absolute()
+            or pure_path.as_posix() != relative_text
+            or any(part in {"", ".", ".."} for part in pure_path.parts)
+            or unsafe_windows_part
+            or pure_path.as_posix() == SOURCE_MANIFEST_NAME
+        ):
+            fail(f"Unsafe source manifest path at line {line_number}: {relative_text!r}")
+
+        normalized = pure_path.as_posix()
+        sort_key = normalized.casefold()
+        if sort_key in seen_paths:
+            fail(f"Duplicate or case-colliding source manifest path: {normalized}")
+        if previous_sort_key is not None and sort_key <= previous_sort_key:
+            fail("Source manifest entries must use deterministic case-insensitive ordering.")
+        seen_paths.add(sort_key)
+        previous_sort_key = sort_key
+
+        source = root.joinpath(*pure_path.parts)
+        if source.is_symlink() or not source.is_file():
+            fail(f"Missing, non-file, or symbolic source input: {normalized}")
+        resolved = source.resolve()
+        if root not in resolved.parents:
+            fail(f"Source manifest path escaped the project root: {normalized}")
+        if sha256_file(source) != digest:
+            fail(f"Source manifest checksum mismatch: {normalized}")
+        entries.append((digest, Path(*pure_path.parts)))
+
+    if not entries:
+        fail("Source manifest is empty.")
+    return entries
 
 
-def write_manifest(root: Path, output: Path) -> None:
-    lines: list[str] = []
-    for path in sorted(root.rglob("*"), key=lambda value: value.as_posix().casefold()):
-        if not path.is_file() or path == output:
+def reject_unlisted_source_files(project_root: Path, listed: set[str]) -> None:
+    """Reject unexpected files in recursively maintained source directories."""
+    for root_name in SOURCE_SCAN_ROOTS:
+        scan_root = project_root / root_name
+        if not scan_root.is_dir():
             continue
-        relative = path.relative_to(root).as_posix()
-        lines.append(f"{sha256_file(path)}  {relative}")
-    output.write_text("\n".join(lines) + "\n", encoding="ascii")
+        for path in scan_root.rglob("*"):
+            relative_path = path.relative_to(project_root)
+            if should_skip_source(relative_path):
+                continue
+            relative = relative_path.as_posix()
+            if path.is_symlink():
+                fail(f"Symbolic link in source release tree: {relative}")
+            if path.is_dir():
+                continue
+            if relative.casefold() not in listed:
+                fail(f"Unlisted file in source release tree: {relative}")
 
 
 def build_source_stage(project_root: Path, stage_root: Path, version: str) -> Path:
+    project_root = Path(project_root).resolve()
+    entries = read_source_manifest(project_root)
+    listed = {relative.as_posix().casefold() for _, relative in entries}
+    reject_unlisted_source_files(project_root, listed)
+
     remove_tree(stage_root)
     source_root = stage_root / f"PortableAccountBrowser_Source_v{version}"
     source_root.mkdir(parents=True)
 
-    missing: list[str] = []
-    for relative_text in SOURCE_FILES:
-        source = project_root / relative_text
-        if not source.is_file():
-            missing.append(relative_text)
-            continue
-        copy_file(source, source_root / relative_text)
+    for expected_digest, relative in entries:
+        source = project_root / relative
+        destination = source_root / relative
+        copy_file(source, destination)
+        if sha256_file(destination) != expected_digest:
+            fail(f"Staged source checksum mismatch: {relative.as_posix()}")
+    copy_file(project_root / SOURCE_MANIFEST_NAME, source_root / SOURCE_MANIFEST_NAME)
 
-    for relative_text in SOURCE_DIRS:
-        source = project_root / relative_text
-        if not source.is_dir():
-            missing.append(relative_text + "/")
-            continue
-        copy_source_directory(source, source_root / relative_text)
-
-    if missing:
-        fail("Source release inputs are missing: " + ", ".join(missing))
-
-    for relative_text in EMPTY_PORTABLE_DIRS:
-        directory = source_root / relative_text
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / ".gitkeep").write_text("", encoding="ascii")
-
-    write_manifest(source_root, source_root / "SOURCE_MANIFEST.sha256")
     validate_source_stage(source_root, version)
     return source_root
 
 
 def validate_source_stage(source_root: Path, version: str) -> None:
+    entries = read_source_manifest(source_root)
+    expected_files = {relative.as_posix().casefold() for _, relative in entries}
+    expected_files.add(SOURCE_MANIFEST_NAME.casefold())
     required = (
         "app.py",
         "README.md",
@@ -200,8 +215,18 @@ def validate_source_stage(source_root: Path, version: str) -> None:
     if len(files) < 65:
         fail(f"Source package is unexpectedly small ({len(files)} files).")
     for path in files:
-        if should_skip_source(path.relative_to(source_root)):
+        relative = path.relative_to(source_root)
+        if should_skip_source(relative):
             fail(f"Temporary file leaked into source package: {path}")
+        if path.name.casefold() in SENSITIVE_FILE_NAMES:
+            fail(f"Sensitive browser/account file leaked into source package: {path}")
+        if relative.as_posix().casefold() not in expected_files:
+            fail(f"Unlisted file leaked into source package: {relative.as_posix()}")
+
+    data_root = source_root / "data"
+    for path in data_root.rglob("*"):
+        if path.is_file() and path.name.casefold() not in ALLOWED_PUBLIC_DATA_FILES:
+            fail(f"Source package contains application/user data: {path.relative_to(source_root)}")
 
 
 def validate_public_binary(binary_root: Path, version: str) -> None:
@@ -312,16 +337,32 @@ def write_checksum(path: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create clean public and source release ZIPs")
     parser.add_argument("--project-root", type=Path, required=True)
-    parser.add_argument("--binary-root", type=Path, required=True)
-    parser.add_argument("--release-root", type=Path, required=True)
+    parser.add_argument("--binary-root", type=Path)
+    parser.add_argument("--release-root", type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--signature-status", default="Unknown")
+    parser.add_argument(
+        "--verify-source-only",
+        action="store_true",
+        help="verify the canonical source manifest and build a temporary source stage",
+    )
     args = parser.parse_args()
 
     project_root = args.project_root.resolve()
+    version = args.version.strip()
+    if args.verify_source_only:
+        source_stage = project_root / "pab_source_stage"
+        try:
+            build_source_stage(project_root, source_stage, version)
+        finally:
+            remove_tree(source_stage)
+        print("Source manifest and clean source-stage verification: PASS")
+        return 0
+
+    if args.binary_root is None or args.release_root is None:
+        parser.error("--binary-root and --release-root are required unless --verify-source-only is used")
     binary_root = args.binary_root.resolve()
     release_root = args.release_root.resolve()
-    version = args.version.strip()
     release_root.mkdir(parents=True, exist_ok=True)
 
     validate_public_binary(binary_root, version)

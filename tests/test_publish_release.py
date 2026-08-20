@@ -13,6 +13,13 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def write_manifest(root: Path, relative_paths: tuple[str, ...]) -> None:
+    lines = []
+    for relative in sorted(relative_paths, key=str.casefold):
+        lines.append(f"{MODULE.sha256_file(root / relative)}  {relative}")
+    (root / MODULE.SOURCE_MANIFEST_NAME).write_text("\n".join(lines) + "\n", encoding="ascii")
+
+
 def make_public_layout(root: Path) -> None:
     for relative in (
         "_internal",
@@ -91,3 +98,126 @@ def test_complete_source_stage_is_created(tmp_path: Path) -> None:
     assert (source_root / ".github" / "workflows" / "ci.yml").is_file()
     assert (source_root / "SOURCE_MANIFEST.sha256").stat().st_size > 1000
     assert not (source_root / ".venv").exists()
+    entries = MODULE.read_source_manifest(source_root)
+    expected = {relative.as_posix() for _, relative in entries}
+    actual = {
+        path.relative_to(source_root).as_posix()
+        for path in source_root.rglob("*")
+        if path.is_file() and path.name != MODULE.SOURCE_MANIFEST_NAME
+    }
+    assert actual == expected
+
+
+def test_source_stage_rejects_sensitive_browser_file(tmp_path: Path) -> None:
+    source_root = MODULE.build_source_stage(ROOT, tmp_path / "stage", "1.3.1")
+    cookie = source_root / "tests" / "fixture" / "Default" / "Network" / "Cookies"
+    cookie.parent.mkdir(parents=True)
+    cookie.write_bytes(b"private")
+
+    with pytest.raises(RuntimeError, match="Sensitive browser/account file"):
+        MODULE.validate_source_stage(source_root, "1.3.1")
+
+
+def test_source_copy_rejects_symbolic_link(tmp_path: Path) -> None:
+    target = tmp_path / "private.txt"
+    target.write_text("private", encoding="utf-8")
+    link = tmp_path / "README.md"
+    link.symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="Symbolic links"):
+        MODULE.copy_file(link, tmp_path / "stage" / "README.md")
+
+
+@pytest.mark.parametrize(
+    "line, message",
+    (
+        ("not-a-hash  app.py\n", "Malformed"),
+        (f"{'0' * 64}  ../private.txt\n", "Unsafe"),
+        (f"{'0' * 64}  /private.txt\n", "Unsafe"),
+        (f"{'0' * 64}  C:/private.txt\n", "Unsafe"),
+        (f"{'0' * 64}  tests/private.txt:stream\n", "Unsafe"),
+        (f"{'0' * 64}  tests/NUL.txt\n", "Unsafe"),
+        (f"{'0' * 64}  tests\\private.txt\n", "Unsafe"),
+        (f"{'0' * 64}  tests/./private.txt\n", "Unsafe"),
+        (f"{'0' * 64}  SOURCE_MANIFEST.sha256\n", "Unsafe"),
+    ),
+)
+def test_source_manifest_rejects_malformed_or_unsafe_entry(
+    tmp_path: Path, line: str, message: str
+) -> None:
+    (tmp_path / MODULE.SOURCE_MANIFEST_NAME).write_text(line, encoding="ascii")
+
+    with pytest.raises(RuntimeError, match=message):
+        MODULE.read_source_manifest(tmp_path)
+
+
+def test_source_manifest_rejects_checksum_mismatch(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("safe", encoding="utf-8")
+    (tmp_path / MODULE.SOURCE_MANIFEST_NAME).write_text(
+        f"{'0' * 64}  app.py\n", encoding="ascii"
+    )
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        MODULE.read_source_manifest(tmp_path)
+
+
+def test_source_manifest_rejects_missing_input(tmp_path: Path) -> None:
+    (tmp_path / MODULE.SOURCE_MANIFEST_NAME).write_text(
+        f"{'0' * 64}  missing.py\n", encoding="ascii"
+    )
+
+    with pytest.raises(RuntimeError, match="Missing, non-file"):
+        MODULE.read_source_manifest(tmp_path)
+
+
+def test_source_manifest_requires_deterministic_order(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("a", encoding="utf-8")
+    (tmp_path / "z.py").write_text("z", encoding="utf-8")
+    a_digest = MODULE.sha256_file(tmp_path / "a.py")
+    z_digest = MODULE.sha256_file(tmp_path / "z.py")
+    (tmp_path / MODULE.SOURCE_MANIFEST_NAME).write_text(
+        f"{z_digest}  z.py\n{a_digest}  a.py\n", encoding="ascii"
+    )
+
+    with pytest.raises(RuntimeError, match="deterministic"):
+        MODULE.read_source_manifest(tmp_path)
+
+
+def test_source_manifest_rejects_duplicate_casefolded_path(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("one", encoding="utf-8")
+    (tmp_path / "readme.md").write_text("two", encoding="utf-8")
+    first = MODULE.sha256_file(tmp_path / "README.md")
+    second = MODULE.sha256_file(tmp_path / "readme.md")
+    (tmp_path / MODULE.SOURCE_MANIFEST_NAME).write_text(
+        f"{first}  README.md\n{second}  readme.md\n", encoding="ascii"
+    )
+
+    with pytest.raises(RuntimeError, match="case-colliding"):
+        MODULE.read_source_manifest(tmp_path)
+
+
+def test_source_manifest_rejects_symbolic_input(tmp_path: Path) -> None:
+    target = tmp_path / "target.py"
+    target.write_text("safe", encoding="utf-8")
+    (tmp_path / "app.py").symlink_to(target)
+    write_manifest(tmp_path, ("app.py",))
+
+    with pytest.raises(RuntimeError, match="symbolic source input"):
+        MODULE.read_source_manifest(tmp_path)
+
+
+def test_unlisted_source_tree_file_is_rejected(tmp_path: Path) -> None:
+    private = tmp_path / "tests" / "customer-export.bin"
+    private.parent.mkdir(parents=True)
+    private.write_bytes(b"private")
+
+    with pytest.raises(RuntimeError, match="Unlisted file"):
+        MODULE.reject_unlisted_source_files(tmp_path, set())
+
+
+def test_modified_staged_source_is_rejected(tmp_path: Path) -> None:
+    source_root = MODULE.build_source_stage(ROOT, tmp_path / "stage", "1.3.1")
+    (source_root / "app.py").write_text("modified", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        MODULE.validate_source_stage(source_root, "1.3.1")
