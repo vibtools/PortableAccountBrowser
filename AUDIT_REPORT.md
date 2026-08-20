@@ -10,8 +10,8 @@ metadata, and a separately bundled Chromium runtime. Automated tests pass and th
 parameterized SQL, direct argument-vector process launches, HTTPS-only custom URLs, confined
 profile identifiers, and explicit public-release data checks.
 
-The audit found **two medium-severity release-integrity weaknesses** and **one low-severity
-quality issue**. All three are remediated in the audited tree:
+The audit found **three medium-severity release-integrity weaknesses** and **one low-severity
+quality issue**. All four are remediated in the audited tree:
 
 1. A top-level source input implemented as a symbolic link could be dereferenced and copied
    into a source release. Source inputs now reject symbolic links before copying.
@@ -20,6 +20,9 @@ quality issue**. All three are remediated in the audited tree:
    source stage, not only to the binary stage.
 3. The release packager imported an unused standard-library module; the import was removed so
    the repository passes Ruff.
+4. A follow-up forensic review of PR #7 found that its symlink control covered top-level files
+   and directory descendants, but not a selected source directory itself. The shared directory
+   copy boundary now rejects a symbolic-link root before traversal.
 
 No embedded credentials, populated profile directories, cookie databases, or account data were
 found in the tracked working tree. This is a source-level audit, not a guarantee about a future
@@ -61,6 +64,15 @@ reviewed, clean checkout.
 
 `scripts/package_publish_release.py` imported `tempfile` without using it. Removal restores a
 clean static-quality check.
+
+### FA-04 — Top-level source directory symlink bypass (Medium, fixed)
+
+The PR #7 fix rejected symbolic links in `copy_file` and while iterating directory descendants,
+but `copy_source_directory` did not inspect its `source` argument. Since `Path.is_dir()` follows
+links, a selected source directory such as `assets/` could itself be replaced by a link to an
+external directory and its regular-file descendants copied into the source release. The copy
+boundary now rejects a linked directory root before traversal, with a regression test proving
+that the external file is not staged.
 
 ## Positive controls observed
 
