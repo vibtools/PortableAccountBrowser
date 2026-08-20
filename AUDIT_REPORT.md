@@ -1,7 +1,8 @@
 # Forensic Audit Report — v1.3.1
 
 Audit date: 2026-08-20
-Target: commit `9c89d8f` plus the remediations documented below
+Initial target: commit `9c89d8f`
+Frozen remediation baseline: commit `27aec9e`
 
 ## Executive summary
 

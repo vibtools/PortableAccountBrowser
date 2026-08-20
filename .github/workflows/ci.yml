@@ -36,5 +36,8 @@ jobs:
       - name: Compile source
         run: python -m compileall -q app.py epb tests scripts
 
+      - name: Run static analysis
+        run: python -m ruff check .
+
       - name: Run automated tests
         run: python -m pytest -q

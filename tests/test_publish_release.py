@@ -71,6 +71,22 @@ def test_publish_builder_has_external_release_default() -> None:
     assert "sign_release.ps1" in text
 
 
+def test_unsigned_release_is_documented() -> None:
+    build = (ROOT / "BUILD.md").read_text(encoding="utf-8")
+    publishing = (ROOT / "PUBLISHING.md").read_text(encoding="utf-8")
+
+    assert "Build without an Authenticode certificate" in build
+    assert "without `-CertificateThumbprint`" in publishing
+    assert "SmartScreen" in build
+    assert "SmartScreen" in publishing
+
+
+def test_ci_runs_ruff() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "python -m ruff check ." in workflow
+
+
 def test_repository_publish_files_exist() -> None:
     for name in (
         "README.md",
