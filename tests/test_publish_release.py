@@ -91,3 +91,23 @@ def test_complete_source_stage_is_created(tmp_path: Path) -> None:
     assert (source_root / ".github" / "workflows" / "ci.yml").is_file()
     assert (source_root / "SOURCE_MANIFEST.sha256").stat().st_size > 1000
     assert not (source_root / ".venv").exists()
+
+
+def test_source_stage_rejects_sensitive_browser_file(tmp_path: Path) -> None:
+    source_root = MODULE.build_source_stage(ROOT, tmp_path / "stage", "1.3.1")
+    cookie = source_root / "tests" / "fixture" / "Default" / "Network" / "Cookies"
+    cookie.parent.mkdir(parents=True)
+    cookie.write_bytes(b"private")
+
+    with pytest.raises(RuntimeError, match="Sensitive browser/account file"):
+        MODULE.validate_source_stage(source_root, "1.3.1")
+
+
+def test_source_copy_rejects_symbolic_link(tmp_path: Path) -> None:
+    target = tmp_path / "private.txt"
+    target.write_text("private", encoding="utf-8")
+    link = tmp_path / "README.md"
+    link.symlink_to(target)
+
+    with pytest.raises(RuntimeError, match="Symbolic links"):
+        MODULE.copy_file(link, tmp_path / "stage" / "README.md")
