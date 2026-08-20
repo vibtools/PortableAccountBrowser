@@ -18,8 +18,7 @@ build_publish_ready.bat
 Default release directory:
 
 ```text
-D:\Project\Python\Mailbox
-elease
+D:\Project\Python\Mailbox\release
 ```
 
 Outputs:
@@ -38,6 +37,17 @@ Custom output directory:
 ```bat
 build_publish_ready.bat -ReleaseRoot "E:\Releases\PortableAccountBrowser"
 ```
+
+Build without an Authenticode certificate:
+
+```bat
+build_publish_ready.bat
+```
+
+Do not pass `-CertificateThumbprint` or `-RequireSignature` for an unsigned build. The build
+pipeline still runs all privacy, layout, ZIP CRC, and SHA-256 checks, and records the executable's
+signature status in `BUILD_REPORT_v1.3.1.txt`. Windows SmartScreen may warn users about an
+unsigned executable; state that limitation clearly on the release page.
 
 Sign with a certificate in `Cert:\CurrentUser\My` and require a valid signature:
 

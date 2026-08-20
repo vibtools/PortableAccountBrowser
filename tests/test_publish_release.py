@@ -71,6 +71,22 @@ def test_publish_builder_has_external_release_default() -> None:
     assert "sign_release.ps1" in text
 
 
+def test_unsigned_release_is_documented() -> None:
+    build = (ROOT / "BUILD.md").read_text(encoding="utf-8")
+    publishing = (ROOT / "PUBLISHING.md").read_text(encoding="utf-8")
+
+    assert "Build without an Authenticode certificate" in build
+    assert "without `-CertificateThumbprint`" in publishing
+    assert "SmartScreen" in build
+    assert "SmartScreen" in publishing
+
+
+def test_ci_runs_ruff() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "python -m ruff check ." in workflow
+
+
 def test_repository_publish_files_exist() -> None:
     for name in (
         "README.md",
@@ -111,3 +127,16 @@ def test_source_copy_rejects_symbolic_link(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="Symbolic links"):
         MODULE.copy_file(link, tmp_path / "stage" / "README.md")
+
+
+def test_source_directory_copy_rejects_root_symbolic_link(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "secret.txt").write_text("private", encoding="utf-8")
+    link = tmp_path / "assets"
+    link.symlink_to(private, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Symbolic links"):
+        MODULE.copy_source_directory(link, tmp_path / "stage" / "assets")
+
+    assert not (tmp_path / "stage" / "assets" / "secret.txt").exists()

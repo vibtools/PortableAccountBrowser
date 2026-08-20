@@ -24,4 +24,13 @@ Recommended topics:
 
 ## Signing
 
-An Authenticode certificate is optional for open-source distribution but strongly recommended. Unsigned executables can trigger Windows SmartScreen warnings. Provide a certificate thumbprint during the build: `build_publish_ready.bat -CertificateThumbprint "YOUR_CERT_THUMBPRINT" -RequireSignature`. The certificate must exist in `Cert:\CurrentUser\My`.
+An Authenticode certificate is optional for open-source distribution but strongly recommended.
+When no certificate is available, run `build_publish_ready.bat` without `-CertificateThumbprint`
+and without `-RequireSignature`. The remaining release gates still run,
+and the build report records the unsigned status. Unsigned executables can trigger Windows
+SmartScreen warnings, so disclose that limitation on the release page and never describe an
+unsigned artifact as publisher-verified.
+
+When a certificate becomes available, use
+`build_publish_ready.bat -CertificateThumbprint "YOUR_CERT_THUMBPRINT" -RequireSignature`. The
+certificate must exist in `Cert:\CurrentUser\My`.
