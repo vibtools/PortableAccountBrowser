@@ -115,6 +115,8 @@ def should_skip_source(path: Path) -> bool:
 
 
 def copy_source_directory(source: Path, destination: Path) -> None:
+    if source.is_symlink():
+        fail(f"Symbolic links are not permitted in the source release: {source}")
     for item in source.rglob("*"):
         relative = item.relative_to(source)
         if should_skip_source(relative):

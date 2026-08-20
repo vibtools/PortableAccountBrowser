@@ -111,3 +111,16 @@ def test_source_copy_rejects_symbolic_link(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="Symbolic links"):
         MODULE.copy_file(link, tmp_path / "stage" / "README.md")
+
+
+def test_source_directory_copy_rejects_root_symbolic_link(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "secret.txt").write_text("private", encoding="utf-8")
+    link = tmp_path / "assets"
+    link.symlink_to(private, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Symbolic links"):
+        MODULE.copy_source_directory(link, tmp_path / "stage" / "assets")
+
+    assert not (tmp_path / "stage" / "assets" / "secret.txt").exists()
