@@ -112,6 +112,10 @@ Create a privacy-clean public build:
 build_publish_ready.bat
 ```
 
+This default command supports an unsigned release when no Authenticode certificate is available.
+All non-signature release checks still run, but Windows SmartScreen may warn users. See
+[Publishing](PUBLISHING.md) before distributing the generated artifacts.
+
 ## Privacy model
 
 - No telemetry is implemented by the launcher.
@@ -154,4 +158,3 @@ Search topics: portable browser windows, multi account browser, isolated chromiu
 profiles, portable Gmail client, WhatsApp Web desktop launcher, Telegram Web
 launcher, privacy focused browser profiles, Python Tkinter desktop application.
 -->
-

@@ -60,6 +60,7 @@ if (-not $SkipBrowserDownload) {
 
     Remove-Item -Recurse -Force $ChromiumRoot -ErrorAction SilentlyContinue
     Move-Item -Path $Staging -Destination $ChromiumRoot
+    New-Item -ItemType File -Path (Join-Path $ChromiumRoot ".gitkeep") -Force | Out-Null
     Remove-Item -Recurse -Force $DownloadRoot -ErrorAction SilentlyContinue
 } else {
     Write-Host "[4/7] Chromium download skipped."

@@ -13,6 +13,15 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def create_test_symlink(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable; enable Developer Mode to run")
+        raise
+
+
 def make_public_layout(root: Path) -> None:
     for relative in (
         "_internal",
@@ -71,6 +80,28 @@ def test_publish_builder_has_external_release_default() -> None:
     assert "sign_release.ps1" in text
 
 
+def test_unsigned_release_is_documented() -> None:
+    build = (ROOT / "BUILD.md").read_text(encoding="utf-8")
+    publishing = (ROOT / "PUBLISHING.md").read_text(encoding="utf-8")
+
+    assert "Build without an Authenticode certificate" in build
+    assert "without `-CertificateThumbprint`" in publishing
+    assert "SmartScreen" in build
+    assert "SmartScreen" in publishing
+
+
+def test_ci_runs_ruff() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "python -m ruff check ." in workflow
+
+
+def test_setup_preserves_tracked_chromium_placeholder() -> None:
+    setup = (ROOT / "scripts" / "setup_dev.ps1").read_text(encoding="utf-8")
+
+    assert 'Join-Path $ChromiumRoot ".gitkeep"' in setup
+
+
 def test_repository_publish_files_exist() -> None:
     for name in (
         "README.md",
@@ -107,7 +138,20 @@ def test_source_copy_rejects_symbolic_link(tmp_path: Path) -> None:
     target = tmp_path / "private.txt"
     target.write_text("private", encoding="utf-8")
     link = tmp_path / "README.md"
-    link.symlink_to(target)
+    create_test_symlink(link, target)
 
     with pytest.raises(RuntimeError, match="Symbolic links"):
         MODULE.copy_file(link, tmp_path / "stage" / "README.md")
+
+
+def test_source_directory_copy_rejects_root_symbolic_link(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "secret.txt").write_text("private", encoding="utf-8")
+    link = tmp_path / "assets"
+    create_test_symlink(link, private, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Symbolic links"):
+        MODULE.copy_source_directory(link, tmp_path / "stage" / "assets")
+
+    assert not (tmp_path / "stage" / "assets" / "secret.txt").exists()
