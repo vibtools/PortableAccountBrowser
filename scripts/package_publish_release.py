@@ -5,7 +5,6 @@ import hashlib
 import os
 import shutil
 import stat
-import tempfile
 import zipfile
 from pathlib import Path
 from typing import Iterable, NoReturn
@@ -98,6 +97,8 @@ def remove_tree(path: Path) -> None:
 
 
 def copy_file(source: Path, destination: Path) -> None:
+    if source.is_symlink():
+        fail(f"Symbolic links are not permitted in the source release: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
 
@@ -202,6 +203,13 @@ def validate_source_stage(source_root: Path, version: str) -> None:
     for path in files:
         if should_skip_source(path.relative_to(source_root)):
             fail(f"Temporary file leaked into source package: {path}")
+        if path.name.casefold() in SENSITIVE_FILE_NAMES:
+            fail(f"Sensitive browser/account file leaked into source package: {path}")
+
+    data_root = source_root / "data"
+    for path in data_root.rglob("*"):
+        if path.is_file() and path.name.casefold() not in ALLOWED_PUBLIC_DATA_FILES:
+            fail(f"Source package contains application/user data: {path.relative_to(source_root)}")
 
 
 def validate_public_binary(binary_root: Path, version: str) -> None:
